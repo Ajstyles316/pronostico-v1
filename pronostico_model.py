@@ -113,38 +113,75 @@ def predecir_mantenimiento(datos):
     try:
         # Cargar modelo
         model, scaler, label_encoder = load_or_train_model()
-        
         # Preparar datos de entrada con nombres de columnas
         X_input = pd.DataFrame([[
             datos.get('dias', 0),
             datos.get('recorrido', 0),
             datos.get('horas_op', 0)
         ]], columns=['dias_desde_mantenimiento', 'recorrido', 'horas_op'])
-        
         # Escalar datos
         X_scaled = scaler.transform(X_input)
-        
         # Predecir
         prediccion_encoded = model.predict(X_scaled)[0]
         probabilidades = model.predict_proba(X_scaled)[0]
-        
         # Convertir predicción de vuelta a etiqueta original
         prediccion = label_encoder.inverse_transform([prediccion_encoded])[0]
-        
         # Determinar riesgo basado en probabilidades
         max_prob = float(max(probabilidades))
-        if max_prob > 0.8:
+        if max_prob > 0.7:
             riesgo = "ALTO"
-        elif max_prob > 0.6:
+        elif max_prob > 0.4:
             riesgo = "MEDIO"
         else:
             riesgo = "BAJO"
-        
+        # Recomendaciones según tipo de mantenimiento (case-insensitive, flexible)
+        prediccion_lower = str(prediccion).strip().lower()
+        print(f"Predicción IA: '{prediccion}' (lower: '{prediccion_lower}')")
+        if "correctivo" in prediccion_lower:
+            recomendaciones = [
+                'Diagnóstico preciso: uso de herramientas de diagnóstico o software.',
+                'Inspección técnica detallada por un mecánico especializado.',
+                'Reemplazo de partes dañadas: motores, correas, rodamientos, etc.',
+                'Reparación estructural: soldaduras, enderezado de chasis, refuerzos.',
+                'Análisis de causa raíz: documentar para evitar que se repita.',
+                'Actualización del historial de la máquina.',
+                'Medidas de seguridad post-reparación: pruebas antes de volver a operar.'
+            ]
+        elif "preventivo" in prediccion_lower:
+            recomendaciones = [
+                'Revisión periódica del equipo.',
+                'Inspección visual de componentes.',
+                'Verificación de ruidos anómalos, vibraciones o fugas.',
+                'Lubricación regular de partes móviles.',
+                'Cambio de filtros y fluidos según cronograma.',
+                'Calibraciones y ajustes: sensores, frenos, presión hidráulica.',
+                'Monitoreo de horas de uso y recorrido.',
+                'Capacitación del operador y revisión diaria básica.',
+                'Checklist preventiva y documentación en cada revisión.'
+            ]
+        else:
+            recomendaciones = ['Consultar con el área de mantenimiento.']
+
+        # --- Ajuste: calcular recorrido futuro como el máximo histórico + 10% ---
+        try:
+            # Intentar cargar el histórico desde el CSV
+            csv_path = os.path.join(os.path.dirname(__file__), 'pronostico_maquinaria_1.csv')
+            if os.path.exists(csv_path):
+                df = pd.read_csv(csv_path)
+                max_recorrido = df['recorrido'].max()
+                recorrido_futuro = max_recorrido * 1.10
+            else:
+                recorrido_futuro = float(datos.get('recorrido', 0)) * 1.10
+        except Exception:
+            recorrido_futuro = float(datos.get('recorrido', 0)) * 1.10
+
         return {
             "resultado": str(prediccion),
             "riesgo": riesgo,
             "probabilidad": round(max_prob * 100, 2),
-            "fecha_prediccion": datetime.now().isoformat()
+            "fecha_prediccion": datetime.now().isoformat(),
+            "recomendaciones": recomendaciones,
+            "recorrido": recorrido_futuro
         }
         
     except Exception as e:
@@ -153,7 +190,8 @@ def predecir_mantenimiento(datos):
             "resultado": "ERROR",
             "riesgo": "DESCONOCIDO",
             "probabilidad": 0,
-            "error": str(e)
+            "error": str(e),
+            "recomendaciones": ['Error al generar recomendaciones.']
         }
 
 # Función para verificar si el modelo está listo
