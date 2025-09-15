@@ -4,7 +4,7 @@ import pickle
 import os
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from xgboost import XGBClassifier
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Variables globales para el modelo y scaler
 model = None
@@ -106,6 +106,74 @@ def train_new_model():
         print(f"❌ Error al entrenar modelo: {e}")
         raise
 
+def calcular_fechas_futuras_mantenimiento(tipo_mantenimiento, dias_desde_mantenimiento, recorrido, horas_op):
+    """
+    Calcula fechas futuras de mantenimiento basadas en el tipo y parámetros actuales
+    """
+    try:
+        fecha_actual = datetime.now()
+        
+        # Calcular fechas futuras según el tipo de mantenimiento
+        if "preventivo" in str(tipo_mantenimiento).lower():
+            # Mantenimiento preventivo: cada 30-90 días o 5000-10000 km
+            if dias_desde_mantenimiento > 60:
+                # Si ya pasaron muchos días, sugerir pronto
+                dias_hasta_mantenimiento = 7
+            elif dias_desde_mantenimiento > 30:
+                dias_hasta_mantenimiento = 15
+            else:
+                dias_hasta_mantenimiento = 30
+            
+            # Ajustar por recorrido
+            if recorrido > 8000:
+                dias_hasta_mantenimiento = min(dias_hasta_mantenimiento, 7)
+            elif recorrido > 5000:
+                dias_hasta_mantenimiento = min(dias_hasta_mantenimiento, 15)
+                
+        elif "correctivo" in str(tipo_mantenimiento).lower():
+            # Mantenimiento correctivo: urgente (1-7 días)
+            if dias_desde_mantenimiento > 100:
+                dias_hasta_mantenimiento = 1  # Muy urgente
+            elif dias_desde_mantenimiento > 60:
+                dias_hasta_mantenimiento = 3  # Urgente
+            else:
+                dias_hasta_mantenimiento = 7  # Pronto
+        else:
+            # Mantenimiento general: 30 días
+            dias_hasta_mantenimiento = 30
+        
+        # Calcular fechas
+        fecha_mantenimiento = fecha_actual + timedelta(days=dias_hasta_mantenimiento)
+        fecha_recordatorio = fecha_mantenimiento - timedelta(days=3)
+        
+        # Determinar urgencia con parámetros específicos
+        if dias_hasta_mantenimiento <= 1 or dias_desde_mantenimiento > 120 or recorrido > 15000 or horas_op > 3000:
+            urgencia = "CRÍTICA"
+        elif dias_hasta_mantenimiento <= 3 or dias_desde_mantenimiento > 90 or recorrido > 12000 or horas_op > 2500:
+            urgencia = "ALTA"
+        elif dias_hasta_mantenimiento <= 7 or dias_desde_mantenimiento > 60 or recorrido > 9000 or horas_op > 2000:
+            urgencia = "MODERADA"
+        elif dias_hasta_mantenimiento <= 15 or dias_desde_mantenimiento > 30 or recorrido > 6000 or horas_op > 1500:
+            urgencia = "NORMAL"
+        else:
+            urgencia = "MÍNIMA"
+        
+        return {
+            "fecha_mantenimiento": fecha_mantenimiento.strftime('%Y-%m-%d'),
+            "fecha_recordatorio": fecha_recordatorio.strftime('%Y-%m-%d'),
+            "dias_hasta_mantenimiento": dias_hasta_mantenimiento,
+            "urgencia": urgencia
+        }
+        
+    except Exception as e:
+        print(f"Error calculando fechas futuras: {e}")
+        return {
+            "fecha_mantenimiento": (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'),
+            "fecha_recordatorio": (datetime.now() + timedelta(days=27)).strftime('%Y-%m-%d'),
+            "dias_hasta_mantenimiento": 30,
+            "urgencia": "NORMAL"
+        }
+
 def predecir_mantenimiento(datos):
     """
     Función principal para predecir mantenimiento
@@ -126,17 +194,52 @@ def predecir_mantenimiento(datos):
         probabilidades = model.predict_proba(X_scaled)[0]
         # Convertir predicción de vuelta a etiqueta original
         prediccion = label_encoder.inverse_transform([prediccion_encoded])[0]
-        # Determinar riesgo basado en probabilidades de confianza
+        # Determinar riesgo basado en probabilidades Y valores de entrada
         max_prob = float(max(probabilidades))
-        probabilidad_porcentaje = round(max_prob * 100, 2)
         
-        # Probabilidad de Confianza
-        if probabilidad_porcentaje > 80:
+        # Obtener valores de entrada para análisis de riesgo
+        dias_desde_mantenimiento = datos.get('dias', 0)
+        recorrido = datos.get('recorrido', 0)
+        horas_op = datos.get('horas_op', 0)
+        
+        # Lógica de riesgo mejorada que considera tanto la probabilidad como los valores
+        riesgo_probabilidad = "BAJO"
+        if max_prob > 0.8:
+            riesgo_probabilidad = "ALTO"
+        elif max_prob > 0.6:
+            riesgo_probabilidad = "MEDIO"
+        
+        # Análisis de riesgo basado en valores de entrada
+        riesgo_valores = "BAJO"
+        
+        # Criterios para riesgo alto basado en valores
+        if (dias_desde_mantenimiento > 90 or 
+            recorrido > 10000 or 
+            horas_op > 2000 or
+            (dias_desde_mantenimiento > 60 and recorrido > 8000) or
+            (dias_desde_mantenimiento > 45 and horas_op > 1500)):
+            riesgo_valores = "ALTO"
+        elif (dias_desde_mantenimiento > 60 or 
+              recorrido > 7000 or 
+              horas_op > 1200 or
+              (dias_desde_mantenimiento > 30 and recorrido > 5000)):
+            riesgo_valores = "MEDIO"
+        
+        # Combinar ambos análisis de riesgo
+        if riesgo_probabilidad == "ALTO" or riesgo_valores == "ALTO":
             riesgo = "ALTO"
-        elif probabilidad_porcentaje >= 60:
+        elif riesgo_probabilidad == "MEDIO" or riesgo_valores == "MEDIO":
             riesgo = "MEDIO"
         else:
             riesgo = "BAJO"
+        
+        # Debug: mostrar información del análisis de riesgo
+        print(f"🔍 ANÁLISIS DE RIESGO:")
+        print(f"   Valores de entrada: días={dias_desde_mantenimiento}, recorrido={recorrido}, horas_op={horas_op}")
+        print(f"   Probabilidad máxima: {max_prob:.3f} ({max_prob*100:.1f}%)")
+        print(f"   Riesgo por probabilidad: {riesgo_probabilidad}")
+        print(f"   Riesgo por valores: {riesgo_valores}")
+        print(f"   Riesgo final: {riesgo}")
         # Recomendaciones según tipo de mantenimiento (case-insensitive, flexible)
         prediccion_lower = str(prediccion).strip().lower()
         print(f"Predicción IA: '{prediccion}' (lower: '{prediccion_lower}')")
@@ -178,78 +281,26 @@ def predecir_mantenimiento(datos):
         except Exception:
             recorrido_futuro = float(datos.get('recorrido', 0)) * 1.10
 
-        # Calcular fechas y urgencia
-        fecha_actual = datetime.now()
-        dias_desde_mantenimiento = datos.get('dias', 0)
-        recorrido_km = datos.get('recorrido', 0)
-        horas_operacion = datos.get('horas_op', 0)
-        
-        # Calcular días hasta mantenimiento según criterios específicos
-        if (dias_desde_mantenimiento > 120 or 
-            recorrido_km > 15000 or 
-            horas_operacion > 3000):
-            # CRÍTICA: ≤1 día
-            dias_hasta_mantenimiento = 1
-        elif (dias_desde_mantenimiento > 90 or 
-              recorrido_km > 12000 or 
-              horas_operacion > 2500):
-            # ALTA: ≤3 días
-            dias_hasta_mantenimiento = 3
-        elif (dias_desde_mantenimiento > 60 or 
-              recorrido_km > 9000 or 
-              horas_operacion > 2000):
-            # MODERADA: ≤7 días
-            dias_hasta_mantenimiento = 7
-        elif (dias_desde_mantenimiento > 30 or 
-              recorrido_km > 6000 or 
-              horas_operacion > 1500):
-            # NORMAL: ≤15 días
-            dias_hasta_mantenimiento = 15
-        else:
-            # MÍNIMA: >15 días, valores normales
-            dias_hasta_mantenimiento = 30
-        
-        # Fecha sugerida de mantenimiento
-        fecha_sugerida = fecha_actual + pd.Timedelta(days=dias_hasta_mantenimiento)
-        
-        # Fecha de recordatorio (3 días antes)
-        fecha_recordatorio = fecha_sugerida - pd.Timedelta(days=3)
-        
-        # Análisis de Riesgo según criterios específicos
-        if (dias_hasta_mantenimiento <= 1 or 
-            dias_desde_mantenimiento > 120 or 
-            recorrido_km > 15000 or 
-            horas_operacion > 3000):
-            urgencia = "CRÍTICA"
-        elif (dias_hasta_mantenimiento <= 3 or 
-              dias_desde_mantenimiento > 90 or 
-              recorrido_km > 12000 or 
-              horas_operacion > 2500):
-            urgencia = "ALTA"
-        elif (dias_hasta_mantenimiento <= 7 or 
-              dias_desde_mantenimiento > 60 or 
-              recorrido_km > 9000 or 
-              horas_operacion > 2000):
-            urgencia = "MODERADA"
-        elif (dias_hasta_mantenimiento <= 15 or 
-              dias_desde_mantenimiento > 30 or 
-              recorrido_km > 6000 or 
-              horas_operacion > 1500):
-            urgencia = "NORMAL"
-        else:
-            urgencia = "MÍNIMA"
+        # Calcular fechas futuras de mantenimiento
+        fechas_calculadas = calcular_fechas_futuras_mantenimiento(
+            prediccion, 
+            datos.get('dias', 0), 
+            datos.get('recorrido', 0), 
+            datos.get('horas_op', 0)
+        )
 
         return {
             "resultado": str(prediccion),
             "riesgo": riesgo,
-            "probabilidad": probabilidad_porcentaje,
-            "fecha_prediccion": datetime.now().isoformat(),
+            "probabilidad": round(max_prob * 100, 2),
+            "fecha_prediccion": datetime.now().strftime('%Y-%m-%d'),
             "recomendaciones": recomendaciones,
             "recorrido": recorrido_futuro,
-            "fecha_sugerida": fecha_sugerida.strftime("%Y-%m-%d"),
-            "fecha_recordatorio": fecha_recordatorio.strftime("%Y-%m-%d"),
-            "dias_hasta_mantenimiento": dias_hasta_mantenimiento,
-            "urgencia": urgencia
+            "fecha_mantenimiento": fechas_calculadas["fecha_mantenimiento"],
+            "fecha_recordatorio": fechas_calculadas["fecha_recordatorio"],
+            "dias_hasta_mantenimiento": fechas_calculadas["dias_hasta_mantenimiento"],
+            "urgencia": fechas_calculadas["urgencia"],
+            "fecha_sugerida": fechas_calculadas["fecha_mantenimiento"]
         }
         
     except Exception as e:
@@ -259,7 +310,12 @@ def predecir_mantenimiento(datos):
             "riesgo": "DESCONOCIDO",
             "probabilidad": 0,
             "error": str(e),
-            "recomendaciones": ['Error al generar recomendaciones.']
+            "recomendaciones": ['Error al generar recomendaciones.'],
+            "fecha_mantenimiento": None,
+            "fecha_recordatorio": None,
+            "dias_hasta_mantenimiento": None,
+            "urgencia": None,
+            "fecha_sugerida": None
         }
 
 # Función para verificar si el modelo está listo
