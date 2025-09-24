@@ -126,11 +126,14 @@ def predecir_mantenimiento(datos):
         probabilidades = model.predict_proba(X_scaled)[0]
         # Convertir predicción de vuelta a etiqueta original
         prediccion = label_encoder.inverse_transform([prediccion_encoded])[0]
-        # Determinar riesgo basado en probabilidades
+        # Determinar riesgo basado en probabilidades de confianza
         max_prob = float(max(probabilidades))
-        if max_prob > 0.7:
+        probabilidad_porcentaje = round(max_prob * 100, 2)
+        
+        # Probabilidad de Confianza
+        if probabilidad_porcentaje > 80:
             riesgo = "ALTO"
-        elif max_prob > 0.4:
+        elif probabilidad_porcentaje >= 60:
             riesgo = "MEDIO"
         else:
             riesgo = "BAJO"
@@ -175,13 +178,78 @@ def predecir_mantenimiento(datos):
         except Exception:
             recorrido_futuro = float(datos.get('recorrido', 0)) * 1.10
 
+        # Calcular fechas y urgencia
+        fecha_actual = datetime.now()
+        dias_desde_mantenimiento = datos.get('dias', 0)
+        recorrido_km = datos.get('recorrido', 0)
+        horas_operacion = datos.get('horas_op', 0)
+        
+        # Calcular días hasta mantenimiento según criterios específicos
+        if (dias_desde_mantenimiento > 120 or 
+            recorrido_km > 15000 or 
+            horas_operacion > 3000):
+            # CRÍTICA: ≤1 día
+            dias_hasta_mantenimiento = 1
+        elif (dias_desde_mantenimiento > 90 or 
+              recorrido_km > 12000 or 
+              horas_operacion > 2500):
+            # ALTA: ≤3 días
+            dias_hasta_mantenimiento = 3
+        elif (dias_desde_mantenimiento > 60 or 
+              recorrido_km > 9000 or 
+              horas_operacion > 2000):
+            # MODERADA: ≤7 días
+            dias_hasta_mantenimiento = 7
+        elif (dias_desde_mantenimiento > 30 or 
+              recorrido_km > 6000 or 
+              horas_operacion > 1500):
+            # NORMAL: ≤15 días
+            dias_hasta_mantenimiento = 15
+        else:
+            # MÍNIMA: >15 días, valores normales
+            dias_hasta_mantenimiento = 30
+        
+        # Fecha sugerida de mantenimiento
+        fecha_sugerida = fecha_actual + pd.Timedelta(days=dias_hasta_mantenimiento)
+        
+        # Fecha de recordatorio (3 días antes)
+        fecha_recordatorio = fecha_sugerida - pd.Timedelta(days=3)
+        
+        # Análisis de Riesgo según criterios específicos
+        if (dias_hasta_mantenimiento <= 1 or 
+            dias_desde_mantenimiento > 120 or 
+            recorrido_km > 15000 or 
+            horas_operacion > 3000):
+            urgencia = "CRÍTICA"
+        elif (dias_hasta_mantenimiento <= 3 or 
+              dias_desde_mantenimiento > 90 or 
+              recorrido_km > 12000 or 
+              horas_operacion > 2500):
+            urgencia = "ALTA"
+        elif (dias_hasta_mantenimiento <= 7 or 
+              dias_desde_mantenimiento > 60 or 
+              recorrido_km > 9000 or 
+              horas_operacion > 2000):
+            urgencia = "MODERADA"
+        elif (dias_hasta_mantenimiento <= 15 or 
+              dias_desde_mantenimiento > 30 or 
+              recorrido_km > 6000 or 
+              horas_operacion > 1500):
+            urgencia = "NORMAL"
+        else:
+            urgencia = "MÍNIMA"
+
         return {
             "resultado": str(prediccion),
             "riesgo": riesgo,
-            "probabilidad": round(max_prob * 100, 2),
+            "probabilidad": probabilidad_porcentaje,
             "fecha_prediccion": datetime.now().isoformat(),
             "recomendaciones": recomendaciones,
-            "recorrido": recorrido_futuro
+            "recorrido": recorrido_futuro,
+            "fecha_sugerida": fecha_sugerida.strftime("%Y-%m-%d"),
+            "fecha_recordatorio": fecha_recordatorio.strftime("%Y-%m-%d"),
+            "dias_hasta_mantenimiento": dias_hasta_mantenimiento,
+            "urgencia": urgencia
         }
         
     except Exception as e:
